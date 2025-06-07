@@ -1,105 +1,140 @@
-"""Multi-agent link chain using LangChain and OpenAI.
+"""Production-grade multi-agent pipeline using LangChain and OpenAI.
 
-This script demonstrates how to orchestrate a planner, content, design, SEO,
-and build agent. LangChain handles the prompt/response flow for each agent while
-OpenAI provides the LLM backend. Use it to generate one or many websites by
-specifying an output directory for each run. The examples here assume you have
-the ``OPENAI_API_KEY`` environment variable set. Replace or extend the
-placeholder functions if you want to experiment with OpenAI's official
-multi-agent API (available under ``openai.beta``).
+This module defines a small framework for orchestrating planner, content,
+design, SEO and build agents. Each agent is represented by a dataclass with
+clear instructions. LangChain handles the prompt/response flow while OpenAI
+serves as the LLM backend. The pipeline writes the generated HTML to an output
+folder. This script assumes the ``OPENAI_API_KEY`` environment variable is set.
+
+The code is structured so it can be swapped out with OpenAI's official
+multi-agent API. See the ``run_with_openai_beta`` example at the bottom of the
+file for guidance.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, Callable
 
 from langchain.chains import LLMChain
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 
-# If you want to use OpenAI's official multi-agent API, you could create
-# assistants with ``openai.beta.assistants`` here. See the README for details.
+# ---------------------------------------------------------------------------
+# Base infrastructure
+# ---------------------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+llm = ChatOpenAI(temperature=0)
+
+
+def call_llm(prompt: str) -> str:
+    """Call the OpenAI model via LangChain with basic error handling."""
+    logger.info("LLM prompt:\n%s", prompt)
+    chain = LLMChain(llm=llm, prompt=PromptTemplate.from_template("{prompt}"))
+    try:
+        return chain.run(prompt=prompt)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"LLM call failed: {exc}") from exc
+
+
+@dataclass
+class Agent:
+    """Simple representation of an agent with a name and template."""
+
+    name: str
+    template: str
+    process: Callable[[str], str] | None = None
+
+    def run(self, input_text: str) -> AgentResponse:
+        prompt = self.template.format(input=input_text)
+        content = call_llm(prompt) if self.process is None else self.process(prompt)
+        return AgentResponse(content)
+
 
 @dataclass
 class AgentResponse:
     content: str
     metadata: Dict[str, Any] | None = None
 
-llm = ChatOpenAI(temperature=0)
 
-def call_llm(prompt: str) -> str:
-    """Call the OpenAI model via LangChain."""
-    chain = LLMChain(llm=llm, prompt=PromptTemplate.from_template("{prompt}"))
-    return chain.run(prompt=prompt)
+# ---------------------------------------------------------------------------
+# Agent definitions
+# ---------------------------------------------------------------------------
 
+PLANNER = Agent(
+    name="Planner",
+    template="Plan a website around the topic: {input}. Include sections and layout.",
+)
 
-def planner_agent(topic: str) -> AgentResponse:
-    prompt = f"Plan a website around the topic: {topic}. Include sections and layout."
-    content = call_llm(prompt)
-    return AgentResponse(content)
+CONTENT = Agent(
+    name="Content",
+    template="Generate detailed page content based on this plan: {input}",
+)
 
+DESIGN = Agent(
+    name="Design",
+    template=(
+        "Generate HTML and CSS for the following content. "
+        "Use accessible markup and responsive design: {input}"
+    ),
+)
 
-def content_agent(plan: str) -> AgentResponse:
-    prompt = f"Generate page content based on this plan: {plan}"
-    content = call_llm(prompt)
-    return AgentResponse(content)
-
-
-def design_agent(content: str) -> AgentResponse:
-    prompt = (
-        "Generate HTML and CSS for the following content. Use accessible "
-        f"markup and mobile-first responsive design: {content}"
-    )
-    design = call_llm(prompt)
-    return AgentResponse(design)
-
-
-def seo_agent(html: str) -> AgentResponse:
-    prompt = f"Improve the SEO metadata and structure for this HTML: {html}"
-    optimized = call_llm(prompt)
-    return AgentResponse(optimized)
+SEO = Agent(
+    name="SEO",
+    template="Improve the SEO metadata and structure for this HTML: {input}",
+)
 
 
-def build_agent(html: str, output_dir: str) -> None:
+# ---------------------------------------------------------------------------
+# Pipeline orchestration
+# ---------------------------------------------------------------------------
+
+def build_site(html: str, output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
-    file_path = os.path.join(output_dir, "index.html")
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(html)
-    print(f"Website built at {file_path}")
+    path = os.path.join(output_dir, "index.html")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    logger.info("Website built at %s", path)
 
 
 def generate_website(topic: str, output_dir: str = "site_output") -> None:
-    plan = planner_agent(topic).content
-    content = content_agent(plan).content
-    design = design_agent(content).content
-    optimized = seo_agent(design).content
-    build_agent(optimized, output_dir)
+    plan = PLANNER.run(topic).content
+    content = CONTENT.run(plan).content
+    design = DESIGN.run(content).content
+    optimized = SEO.run(design).content
+    build_site(optimized, output_dir)
 
-# -- Optional OpenAI Multi-Agent API demonstration ---------------------------
-# The official API allows creating and coordinating multiple assistants. Below
-# is a minimal example showing how you might integrate this script with that
-# API. Remove the leading underscores to use once you have your API key set.
+
+# ---------------------------------------------------------------------------
+# Optional OpenAI Multi-Agent API demonstration
+# ---------------------------------------------------------------------------
+# The following demonstrates how this pipeline could be replaced by
+# OpenAI's official multi-agent API. Uncomment and adjust once you have an API
+# key and want to experiment with the beta assistants.
 #
-# def _create_assistant(name: str, instructions: str):
-#     return openai.beta.assistants.create(
-#         name=name,
-#         instructions=instructions,
-#         model="gpt-4o",
+# import openai
+#
+# def run_with_openai_beta(topic: str, output_dir: str = "site_output") -> None:
+#     planner = openai.beta.assistants.create(
+#         name="Planner", instructions="Plan website layouts", model="gpt-4o"
 #     )
-#
-# def _run_multi_agent(topic: str):
-#     planner = _create_assistant("Planner", "Plan website layouts")
-#     content = _create_assistant("Content", "Write website copy")
-#     # ...additional assistants for design and SEO
-#     # Use openai.beta.threads and runs to orchestrate their conversation
-#     # and fetch the final result.
-
+#     content = openai.beta.assistants.create(
+#         name="Content", instructions="Write website copy", model="gpt-4o"
+#     )
+#     # Additional assistants would be created for design and SEO.
+#     # You would then use threads and runs to orchestrate communication
+#     # between these assistants and retrieve the final HTML.
+#     raise NotImplementedError
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate a website via multi-agent chain")
+    parser = argparse.ArgumentParser(description="Generate a website via multi-agent pipeline")
     parser.add_argument("topic", help="Topic for the website")
     parser.add_argument("--output", default="site_output", help="Directory for generated site")
     args = parser.parse_args()

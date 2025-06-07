@@ -34,7 +34,7 @@ To address gaps in accessibility, customization, and performance, we propose a m
 4. **SEO Agent** – optimizes markup and metadata for search engines.
 5. **Build Agent** – assembles the result into a deployable site.
 
-A minimal implementation of this workflow can be found in [`multi_agent/link_chain.py`](multi_agent/link_chain.py). The script now uses **LangChain** with OpenAI's API to run each agent. It also includes comments on how to adapt the code for OpenAI's official multi-agent API (available under `openai.beta`).
+A production-grade implementation of this workflow is available in [`multi_agent/link_chain.py`](multi_agent/link_chain.py). The script leverages **LangChain** with OpenAI's API to run each agent, includes logging, and shows how to adapt the code for OpenAI's official multi-agent API (available under `openai.beta`).
 
 ## Example Sites
 
